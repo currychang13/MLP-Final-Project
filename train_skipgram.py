@@ -12,7 +12,7 @@ os.makedirs("./skip_gram", exist_ok=True)
 CORPUS_FILE = './skip_gram/diagnosis_corpus.pkl'
 MODEL_FILE = './skip_gram/diagnosis_skipgram.model'
 
-def load_and_split_data():
+def load_and_split_data(training_set_only):
     print("Loading Demographics for split...")
     df_demographics = pd.read_csv("./data/final_demographic_death.csv")
     
@@ -25,8 +25,11 @@ def load_and_split_data():
     n_patients = len(unique_patient_ids)
     n_train = int(n_patients * 0.80)
     
-    # We only need train_pids for embedding training
-    train_pids = set(unique_patient_ids[:n_train])
+    if training_set_only:
+        train_pids = set(unique_patient_ids[:n_train])
+    else:
+        train_pids = set(unique_patient_ids)
+    
     return train_pids, df_demographics
 
 def build_temporal_corpus(train_pids, df_demographics):
@@ -101,7 +104,7 @@ def train_model(corpus):
     print(f"Model saved to {MODEL_FILE}")
 
 if __name__ == '__main__':
-    train_pids, df_demos = load_and_split_data()
+    train_pids, df_demos = load_and_split_data(training_set_only=False)
     corpus = build_temporal_corpus(train_pids, df_demos)
     save_corpus(corpus)
     train_model(corpus)
