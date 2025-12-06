@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-import numpy as np
+import torch.nn.utils.rnn as rnn_utils
 
 SEQUENCE_LENGTH = 100 
 
@@ -42,33 +41,39 @@ class EnsembleHFPredictor(nn.Module):
         
         # Output Layer 
         self.classifier = nn.Sequential(
-            nn.Linear(FINAL_DENSE_OUTPUT, 1),
+            nn.Linear(FINAL_DENSE_OUTPUT, 2),
             nn.Sigmoid() 
         )
 
-    def forward(self, x_drug, x_lab, x_diagnosis, x_static):
-        # Only use the hidden state of the last time step (h_n), original return tuple is (output, h_n, c_n)
-        _, (h_drug, _) = self.lstm_drug(x_drug)
-        drug_features = h_drug.squeeze(0)   # flatten to 2d, ignore the layer#
+    def _process_packed_input(self, lstm_layer, x_tensor, lengths):
+        # 1. Pack the sequence
+        packed_input = rnn_utils.pack_padded_sequence(
+            x_tensor, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        # 2. Pass to LSTM
+        _, (h_n, _) = lstm_layer(packed_input)  # implicit state, Initialize h_0, c_0 at each batch.
         
-        _, (h_lab, _) = self.lstm_lab(x_lab)
-        lab_features = h_lab.squeeze(0)
+        # 3. Extract final hidden state
+        return h_n.squeeze(0)
+    
+    def forward(self, x_drug, drug_lens, x_lab, lab_lens, x_diagnosis, diag_lens, x_static):
         
-        _, (h_diagnosis, _) = self.lstm_diagnosis(x_diagnosis)
-        diagnosis_features = h_diagnosis.squeeze(0)
-
-        # Static        
+        # 1. Process LSTMs with Packing
+        drug_features = self._process_packed_input(self.lstm_drug, x_drug, drug_lens)
+        lab_features = self._process_packed_input(self.lstm_lab, x_lab, lab_lens)
+        diagnosis_features = self._process_packed_input(self.lstm_diagnosis, x_diagnosis, diag_lens)
+        
+        # 2. Process Static Data
         static_features = self.dense_static(x_static)
         
-        # Concatenate all features
+        # 3. Feature Fusion
         combined_features = torch.cat(
             (drug_features, lab_features, diagnosis_features, static_features), 
             dim=1
         )
         
-        # head
+        # 4. Classification
         hidden_output = self.final_hidden(combined_features)
-
         output = self.classifier(hidden_output)
         
         return output

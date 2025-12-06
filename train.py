@@ -1,84 +1,132 @@
 import torch
 import torch.nn as nn
-from dataset import EHRDataset
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
-from model import EnsembleHFPredictor 
+from model import EnsembleHFPredictor
+from tqdm import tqdm
 
-def train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs, device):
-    print("Starting model training...")
-    model.to(device)
-    
-    for epoch in range(1, num_epochs + 1):
-        # Training Phase
-        model.train()
-        train_loss = 0
-        for batch_data in train_loader:
-            # Move data to device
-            x_drug = batch_data['drug'].to(device)
-            x_lab = batch_data['lab'].to(device)
-            x_diagnosis = batch_data['diagnosis'].to(device)
-            x_static = batch_data['static'].to(device)
-            y_target = batch_data['label'].to(device)
+class EHRDataset(Dataset):
+    def __init__(self, processed_data_path):
+        self.data = np.load(processed_data_path, allow_pickle=True)
+        
+    def __len__(self):
+        return len(self.data)
 
-            optimizer.zero_grad()
-            
-            y_pred = model(x_drug, x_lab, x_diagnosis, x_static)
-            loss = criterion(y_pred, y_target)
-            
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
+    def _process_sequence(self, raw_tensor):
+        """
+        Converts Pre-Padded tensor (zeros at start) to Post-Padded (zeros at end)
+        and returns the actual length.
+        """
+        # 1. Identify rows that are NOT all zeros
+        # raw_tensor shape: (Max_Len, Features)
+        non_zero_mask = ~np.all(raw_tensor == 0, axis=1)
+        actual_length = np.sum(non_zero_mask)
+        
+        # Edge Case: If sequence is empty (all zeros), keep length 1 to avoid NaN in LSTM
+        if actual_length == 0:
+            actual_length = 1
+            # Tensor remains all zeros, which is fine
+            return torch.from_numpy(raw_tensor).float(), actual_length
 
-        # Validation Phase
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for batch_data in val_loader:
-                x_drug = batch_data['drug'].to(device)
-                x_lab = batch_data['lab'].to(device)
-                x_diagnosis = batch_data['diagnosis'].to(device)
-                x_static = batch_data['static'].to(device)
-                y_target = batch_data['label'].to(device)
-                
-                y_pred = model(x_drug, x_lab, x_diagnosis, x_static)
-                val_loss += criterion(y_pred, y_target).item()
+        # 2. Extract valid data
+        valid_data = raw_tensor[non_zero_mask]
+        
+        # 3. Create new Post-Padded tensor
+        max_len, features = raw_tensor.shape
+        new_tensor = np.zeros((max_len, features), dtype=np.float32)
+        new_tensor[:actual_length] = valid_data # Fill valid data at the START
+        
+        return torch.from_numpy(new_tensor).float(), actual_length
 
-        print(f"Epoch {epoch}/{num_epochs}: Train Loss: {train_loss / len(train_loader):.4f}, Validation Loss: {val_loss / len(val_loader):.4f}")
+    def __getitem__(self, idx):
+        obs = self.data[idx]
+        
+        # Process each input to get Tensor (Post-Padded) and Length
+        x_drug, len_drug = self._process_sequence(obs['drug'])
+        x_lab, len_lab = self._process_sequence(obs['lab'])
+        x_diag, len_diag = self._process_sequence(obs['diagnosis'])
+        
+        return {
+            'drug': x_drug,
+            'drug_len': len_drug,
+            'lab': x_lab,
+            'lab_len': len_lab,
+            'diagnosis': x_diag,
+            'diagnosis_len': len_diag,
+            'static': torch.from_numpy(obs['static']).float(),
+            'label': torch.tensor(obs['label']).float().unsqueeze(0)
+        }
 
-if __name__ == '__main__':
-    # Configuration
+def train_model():
     BATCH_SIZE = 64
     LEARNING_RATE = 1e-4
     NUM_EPOCHS = 10
-    
-    # Check for GPU
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load the dataset
-    full_dataset = EHRDataset('final_processed_ehr_tensors.npy')
+    train_dataset = EHRDataset('train.npy')
+    val_dataset = EHRDataset('validate.npy')
     
-    # Split the dataset (80% Train, 10% Validation, 10% Test - mimicking the paper)
-    train_size = int(0.8 * len(full_dataset))
-    val_size = int(0.1 * len(full_dataset))
-    test_size = len(full_dataset) - train_size - val_size
-    
-    train_dataset, val_dataset, test_dataset = random_split(full_dataset, [train_size, val_size, test_size])
+    sample = train_dataset[0]
+    print("-------- Sample 0 inspection")
 
+    for key, value in sample.items():
+        if isinstance(value, torch.Tensor):
+            print(f"{key}: Tensor Shape {value.shape}, Type: {value.dtype}")
+        else: 
+            print(f"{key}: {value}")
+    print("\n--- Drug Tensor Preview (First 5 rows) ---")
+    print(sample['drug'][:5])
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    # Instantiate the model
-    model = EnsembleHFPredictor()
-    
-    # Loss Function (Binary Cross-Entropy Loss)
-    criterion = nn.BCELoss() 
-    
-    # Optimizer
-    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    
-    # Start training
-    train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS, device)
+    model = EnsembleHFPredictor().to(DEVICE)
+    criterion = nn.BCELoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
-    print("\nTraining completed. The test_loader is ready for final evaluation metrics (AUC/C-statistic).")
+    for epoch in range(1, NUM_EPOCHS + 1):
+        model.train()
+        train_loss = 0
+        loop = tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS}", leave=True)
+        for batch in loop:
+            x_drug = batch['drug'].to(DEVICE)
+            l_drug = batch['drug_len'] # Lengths stay on CPU usually for packing logic, but model handles it
+            
+            x_lab = batch['lab'].to(DEVICE)
+            l_lab = batch['lab_len']
+            
+            x_diag = batch['diagnosis'].to(DEVICE)
+            l_diag = batch['diagnosis_len']
+            
+            x_static = batch['static'].to(DEVICE)
+            y = batch['label'].to(DEVICE)
+
+            optimizer.zero_grad()
+            
+            # Forward pass now includes lengths
+            y_pred = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
+            
+            loss = criterion(y_pred, y)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+        avg_train_loss = train_loss / len(train_loader)
+        
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for batch in val_loader:
+                x_drug, l_drug = batch['drug'].to(DEVICE), batch['drug_len']
+                x_lab, l_lab = batch['lab'].to(DEVICE), batch['lab_len']
+                x_diag, l_diag = batch['diagnosis'].to(DEVICE), batch['diagnosis_len']
+                x_static = batch['static'].to(DEVICE)
+                y = batch['label'].to(DEVICE)
+                
+                y_pred = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
+                loss = criterion(y_pred, y)
+                val_loss += loss.item()
+        
+        avg_val_loss = val_loss / len(val_loader)
+        print(f"Epoch {epoch}: Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
+
+if __name__ == '__main__':
+    train_model()
