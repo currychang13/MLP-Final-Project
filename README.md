@@ -1,6 +1,6 @@
 # Ensemble Heart Failure Prediction System
 ## Model Architecture
-![MLP_final](https://hackmd.io/_uploads/ByaT_zGzZe.png)
+<img width="1329" height="871" alt="MLP_final" src="https://github.com/user-attachments/assets/44fedfff-4ac6-480c-8468-82c1225e4f3e" />
 
 ## 1. Inductive Biases
 1.  **Temporal Locality (The 6-Month Assumption):** We assume that the predictive signal for a specific admission outcome is concentrated in the immediate history. Events occurring prior to $t_{leave} - 6\text{ months}$ are treated as noise rather than signal.
