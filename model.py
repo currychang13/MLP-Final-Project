@@ -40,20 +40,15 @@ class EnsembleHFPredictor(nn.Module):
         )
         
         # Output Layer 
-        self.classifier = nn.Sequential(
-            nn.Linear(FINAL_DENSE_OUTPUT, 2),
-            nn.Sigmoid() 
-        )
+        self.classifier = nn.Linear(FINAL_DENSE_OUTPUT, 2)
 
     def _process_packed_input(self, lstm_layer, x_tensor, lengths):
-        # 1. Pack the sequence
+        # Pack the sequence
         packed_input = rnn_utils.pack_padded_sequence(
             x_tensor, lengths.cpu(), batch_first=True, enforce_sorted=False
         )
-        # 2. Pass to LSTM
         _, (h_n, _) = lstm_layer(packed_input)  # implicit state, Initialize h_0, c_0 at each batch.
         
-        # 3. Extract final hidden state
         return h_n.squeeze(0)
     
     def forward(self, x_drug, drug_lens, x_lab, lab_lens, x_diagnosis, diag_lens, x_static):

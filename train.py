@@ -4,6 +4,16 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from model import EnsembleHFPredictor
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_auc_score, average_precision_score
+import os
+
+BATCH_SIZE = 64
+LEARNING_RATE = 1e-4
+NUM_EPOCHS = 20
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+PLOT_DIR = "./plots"
+WEIGHT_DIR = "./weights"
 
 class EHRDataset(Dataset):
     def __init__(self, processed_data_path):
@@ -12,121 +22,175 @@ class EHRDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def _process_sequence(self, raw_tensor):
-        """
-        Converts Pre-Padded tensor (zeros at start) to Post-Padded (zeros at end)
-        and returns the actual length.
-        """
-        # 1. Identify rows that are NOT all zeros
-        # raw_tensor shape: (Max_Len, Features)
-        non_zero_mask = ~np.all(raw_tensor == 0, axis=1)
-        actual_length = np.sum(non_zero_mask)
-        
-        # Edge Case: If sequence is empty (all zeros), keep length 1 to avoid NaN in LSTM
-        if actual_length == 0:
-            actual_length = 1
-            # Tensor remains all zeros, which is fine
-            return torch.from_numpy(raw_tensor).float(), actual_length
-
-        # 2. Extract valid data
-        valid_data = raw_tensor[non_zero_mask]
-        
-        # 3. Create new Post-Padded tensor
-        max_len, features = raw_tensor.shape
-        new_tensor = np.zeros((max_len, features), dtype=np.float32)
-        new_tensor[:actual_length] = valid_data # Fill valid data at the START
-        
-        return torch.from_numpy(new_tensor).float(), actual_length
-
     def __getitem__(self, idx):
         obs = self.data[idx]
-        
-        # Process each input to get Tensor (Post-Padded) and Length
-        x_drug, len_drug = self._process_sequence(obs['drug'])
-        x_lab, len_lab = self._process_sequence(obs['lab'])
-        x_diag, len_diag = self._process_sequence(obs['diagnosis'])
-        
         return {
-            'drug': x_drug,
-            'drug_len': len_drug,
-            'lab': x_lab,
-            'lab_len': len_lab,
-            'diagnosis': x_diag,
-            'diagnosis_len': len_diag,
+            'drug': torch.from_numpy(obs['drug']).float(),
+            'drug_len': obs['drug_len'], 
+            'lab': torch.from_numpy(obs['lab']).float(),
+            'lab_len': obs['lab_len'],
+            'diagnosis': torch.from_numpy(obs['diagnosis']).float(),
+            'diagnosis_len': obs['diag_len'], 
             'static': torch.from_numpy(obs['static']).float(),
-            'label': torch.tensor(obs['label']).float().unsqueeze(0)
+            'label': torch.tensor(obs['label']).float() 
         }
 
-def train_model():
-    BATCH_SIZE = 64
-    LEARNING_RATE = 1e-4
-    NUM_EPOCHS = 10
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def plot_history(history):
 
+    os.makedirs(PLOT_DIR, exist_ok=True)
+    
+    epochs = range(1, len(history['train_loss']) + 1)
+    
+# --- Plot 1: Loss ---
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, history['train_loss'], label='Train Loss')
+    plt.plot(epochs, history['val_loss'], label='Val Loss')
+    plt.title('Loss over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(PLOT_DIR, "loss.png"))
+    plt.close() # Close to free memory and start fresh canvas
+
+    # --- Plot 2: ROC-AUC ---
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, history['val_roc_auc'], label='Val ROC-AUC', color='orange')
+    plt.title('Validation ROC-AUC')
+    plt.xlabel('Epoch')
+    plt.ylabel('Score')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(PLOT_DIR, "roc_auc.png"))
+    plt.close()
+
+    # --- Plot 3: PR-AUC ---
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, history['val_pr_auc'], label='Val PR-AUC', color='green')
+    plt.title('Validation PR-AUC')
+    plt.xlabel('Epoch')
+    plt.ylabel('Score')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(PLOT_DIR, "pr_auc.png"))
+    plt.close()
+
+    print(f"Plots saved to {PLOT_DIR}/ directory (loss.png, roc_auc.png, pr_auc.png)")
+
+def train_model():
     train_dataset = EHRDataset('train.npy')
     val_dataset = EHRDataset('validate.npy')
-    
-    sample = train_dataset[0]
-    print("-------- Sample 0 inspection")
-
-    for key, value in sample.items():
-        if isinstance(value, torch.Tensor):
-            print(f"{key}: Tensor Shape {value.shape}, Type: {value.dtype}")
-        else: 
-            print(f"{key}: {value}")
-    print("\n--- Drug Tensor Preview (First 5 rows) ---")
-    print(sample['drug'][:5])
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     model = EnsembleHFPredictor().to(DEVICE)
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
+    
+    # for ploting
+    history = {
+        'train_loss': [],
+        'val_loss': [],
+        'val_roc_auc': [],
+        'val_pr_auc': []
+    }
+
+    best_val_loss = float('inf')
 
     for epoch in range(1, NUM_EPOCHS + 1):
         model.train()
         train_loss = 0
-        loop = tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS}", leave=True)
+        loop = tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS} [TRAIN]", leave=True)
+        
         for batch in loop:
             x_drug = batch['drug'].to(DEVICE)
-            l_drug = batch['drug_len'] # Lengths stay on CPU usually for packing logic, but model handles it
-            
-            x_lab = batch['lab'].to(DEVICE)
-            l_lab = batch['lab_len']
-            
             x_diag = batch['diagnosis'].to(DEVICE)
-            l_diag = batch['diagnosis_len']
-            
+            x_lab = batch['lab'].to(DEVICE)
             x_static = batch['static'].to(DEVICE)
             y = batch['label'].to(DEVICE)
-
-            optimizer.zero_grad()
             
-            # Forward pass now includes lengths
+            # lengths need to stay CPU for pack_padded_sequence
+            l_drug, l_lab, l_diag = batch['drug_len'], batch['lab_len'], batch['diagnosis_len']
+            
+            optimizer.zero_grad()
             y_pred = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
             
             loss = criterion(y_pred, y)
             loss.backward()
+
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
             optimizer.step()
             train_loss += loss.item()
+
+            loop.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
+        
+        scheduler.step()
+
         avg_train_loss = train_loss / len(train_loader)
         
         model.eval()
         val_loss = 0
+        
+        all_y_true = []
+        all_y_scores = []
+
         with torch.no_grad():
-            for batch in val_loader:
-                x_drug, l_drug = batch['drug'].to(DEVICE), batch['drug_len']
-                x_lab, l_lab = batch['lab'].to(DEVICE), batch['lab_len']
-                x_diag, l_diag = batch['diagnosis'].to(DEVICE), batch['diagnosis_len']
+            for batch in tqdm(val_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS} [VAL]", leave=True):
+                x_drug = batch['drug'].to(DEVICE)
+                x_lab = batch['lab'].to(DEVICE)
+                x_diag = batch['diagnosis'].to(DEVICE)
                 x_static = batch['static'].to(DEVICE)
                 y = batch['label'].to(DEVICE)
                 
-                y_pred = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
-                loss = criterion(y_pred, y)
+                l_drug, l_lab, l_diag = batch['drug_len'], batch['lab_len'], batch['diagnosis_len']
+                
+                logits = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
+                
+                loss = criterion(logits, y)
                 val_loss += loss.item()
+                
+                probs = torch.sigmoid(logits)
+                all_y_true.append(y.cpu().numpy())
+                all_y_scores.append(probs.cpu().numpy())
         
         avg_val_loss = val_loss / len(val_loader)
-        print(f"Epoch {epoch}: Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
+        
+        all_y_true = np.vstack(all_y_true)
+        all_y_scores = np.vstack(all_y_scores)
+    
+        # Calculate Metrics (Macro Average handles both labels: death_30 & death_180)
+        try:
+            epoch_roc_auc = roc_auc_score(all_y_true, all_y_scores, average='macro')
+            epoch_pr_auc = average_precision_score(all_y_true, all_y_scores, average='macro')
+        except ValueError:
+            # Handles edge case where a batch has only 1 class (e.g. all 0s)
+            print("Warning: Only one class present in y_true. ROC AUC score is not defined in that case.")
+            epoch_roc_auc = 0.0
+            epoch_pr_auc = 0.0
+
+        # Store history
+        history['train_loss'].append(avg_train_loss)
+        history['val_loss'].append(avg_val_loss)
+        history['val_roc_auc'].append(epoch_roc_auc)
+        history['val_pr_auc'].append(epoch_pr_auc)
+
+        print(f"Epoch {epoch}: Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | "
+              f"ROC-AUC: {epoch_roc_auc:.4f} | PR-AUC: {epoch_pr_auc:.4f}")
+        
+        # saves weight
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            save_path = os.path.join(WEIGHT_DIR, "best_model.pth")
+            torch.save(model.state_dict(), save_path)
+            print(f"--> Best model saved (Val loss: {best_val_loss:.4f})")
+        
+        torch.save(model.state_dict(), os.path.join(WEIGHT_DIR, "last_model.pth"))
+   
+    plot_history(history)
+    print("Training complete. Weights saved in ./checkpoints/")
 
 if __name__ == '__main__':
     train_model()

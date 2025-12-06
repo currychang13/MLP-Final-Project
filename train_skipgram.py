@@ -13,10 +13,6 @@ CORPUS_FILE = './skip_gram/diagnosis_corpus.pkl'
 MODEL_FILE = './skip_gram/diagnosis_skipgram.model'
 
 def load_and_split_data():
-    """
-    Loads raw CSVs and determines Train/Val/Test splits.
-    We must ONLY train embeddings on the TRAIN set to prevent data leakage.
-    """
     print("Loading Demographics for split...")
     df_demographics = pd.read_csv("./data/final_demographic_death.csv")
     
@@ -34,9 +30,6 @@ def load_and_split_data():
     return train_pids, df_demographics
 
 def build_temporal_corpus(train_pids, df_demographics):
-    """
-    Constructs the corpus (list of list of codes) strictly within the observation window.
-    """
     print("Loading OPD records...")
     df_opd = pd.read_csv("./data/final_opd_record.csv")
     
@@ -108,14 +101,7 @@ def train_model(corpus):
     print(f"Model saved to {MODEL_FILE}")
 
 if __name__ == '__main__':
-    # 1. Get Split
     train_pids, df_demos = load_and_split_data()
-    
-    # 2. Build Corpus
     corpus = build_temporal_corpus(train_pids, df_demos)
-    
-    # 3. Store Corpus File
     save_corpus(corpus)
-    
-    # 4. Train and Save Model
     train_model(corpus)
