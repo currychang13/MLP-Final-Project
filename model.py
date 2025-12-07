@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.utils.rnn as rnn_utils
 
-SEQUENCE_LENGTH = 100 
+# SEQUENCE_LENGTH = 100 
 
 DRUG_DIM = 165     
 LABS_DIM = 46      

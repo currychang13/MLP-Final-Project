@@ -3,3 +3,5 @@ skip_gram/*
 *.npy
 plots/*
 __pycache__
+weights/*
+result/*

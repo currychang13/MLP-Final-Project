@@ -5,7 +5,7 @@ from gensim.models import Word2Vec
 from tqdm import tqdm
 import os
 
-SEQUENCE_LENGTH = 100 
+# SEQUENCE_LENGTH = 100 
 DIAGNOSIS_DIM = 32 
 DRUG_DIM = 165
 LABS_DIM = 46 
@@ -95,12 +95,11 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
     
     # ------------------- lab --------------------
     lab_cols = [c for c in df_lab.columns if c not in ['PERSONID2', 'LOGDATE', '%CKMB']]
-    lab_sequence_data = df_lab_history[lab_cols].head(SEQUENCE_LENGTH).values   # truncated to SEQUENCE_LENGTH
-    lab_len = lab_sequence_data.shape[0]
+    # lab_sequence_data = df_lab_history[lab_cols].head(SEQUENCE_LENGTH).values   # truncated to SEQUENCE_LENGTH
+    lab_sequence_data = df_lab_history[lab_cols].values
 
-    lab_tensor = np.zeros((SEQUENCE_LENGTH, LABS_DIM), dtype=np.float32)
+    # lab_tensor = np.zeros((SEQUENCE_LENGTH, LABS_DIM), dtype=np.float32)
     if lab_sequence_data.size > 0:
-        
         # Standardize
         for i, col_name in enumerate(lab_cols):
             mu = lab_stats[col_name]['mean']
@@ -112,27 +111,36 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
                 lab_sequence_data[:, i] = 0
 
         # post padding
-        if lab_sequence_data.shape[0] < SEQUENCE_LENGTH:
-            padding_rows = SEQUENCE_LENGTH - lab_sequence_data.shape[0]
-            lab_sequence_data = np.vstack([lab_sequence_data, np.zeros((padding_rows, lab_sequence_data.shape[1]))])
-        
-        current_cols = min(LABS_DIM, lab_sequence_data.shape[1])
-        lab_tensor[:, :current_cols] = lab_sequence_data[:, :current_cols]
-        
+        # if lab_sequence_data.shape[0] < SEQUENCE_LENGTH:
+        #     padding_rows = SEQUENCE_LENGTH - lab_sequence_data.shape[0]
+        #     lab_sequence_data = np.vstack([lab_sequence_data, np.zeros((padding_rows, lab_sequence_data.shape[1]))])
+    else:
+        lab_sequence_data = np.zeros((1, LABS_DIM), dtype=np.float32)
+
+        # current_cols = min(LABS_DIM, lab_sequence_data.shape[1])
+        # lab_tensor[:, :current_cols] = lab_sequence_data[:, :current_cols]
+    
+    lab_tensor = lab_sequence_data.astype(np.float32)
+    lab_len = lab_tensor.shape[0]    
+
     # --------------- DRUG --------------
     drug_cols = [c for c in df_drug.columns if c not in ['PERSONID2', 'CREATEDATE']]
-    drug_sequence_data = df_drug_history[drug_cols].head(SEQUENCE_LENGTH).values
-    drug_len = len(drug_sequence_data)
+    # drug_sequence_data = df_drug_history[drug_cols].head(SEQUENCE_LENGTH).values
+    drug_sequence_data = df_drug_history[drug_cols].values
 
-    drug_tensor = np.zeros((SEQUENCE_LENGTH, DRUG_DIM), dtype=np.float32)
-    if drug_sequence_data.size > 0:
-        if drug_sequence_data.shape[0] < SEQUENCE_LENGTH:
-            padding_rows = SEQUENCE_LENGTH - drug_sequence_data.shape[0]
-            drug_sequence_data = np.vstack([drug_sequence_data, np.zeros((padding_rows, DRUG_DIM))])
+    # drug_tensor = np.zeros((SEQUENCE_LENGTH, DRUG_DIM), dtype=np.float32)
+    # if drug_sequence_data.size > 0:
+    #     if drug_sequence_data.shape[0] < SEQUENCE_LENGTH:
+    #         padding_rows = SEQUENCE_LENGTH - drug_sequence_data.shape[0]
+    #         drug_sequence_data = np.vstack([drug_sequence_data, np.zeros((padding_rows, DRUG_DIM))])            
+        # current_cols = min(DRUG_DIM, drug_sequence_data.shape[1])
+        # drug_tensor[:, :current_cols] = drug_sequence_data[:, :current_cols]
+    if drug_sequence_data.size == 0:
+        drug_tensor = np.zeros((1, DRUG_DIM), dtype=np.float32)
+    else:
+        drug_tensor = drug_sequence_data.astype(np.float32)
+    drug_len = drug_tensor.shape[0]
             
-        current_cols = min(DRUG_DIM, drug_sequence_data.shape[1])
-        drug_tensor[:, :current_cols] = drug_sequence_data[:, :current_cols]
-    
     # ------------- diagnosis ------------------
     diagnosis_sequence = []
 
@@ -147,22 +155,21 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
                 vector = np.zeros(DIAGNOSIS_DIM, dtype=np.float32)
             
             diagnosis_sequence.append(vector)
-            print(vector)
 
 
     if len(diagnosis_sequence) > 0:
-        diagnosis_sequence = np.array(diagnosis_sequence, dtype=np.float32)
+        diagnosis_tensor = np.array(diagnosis_sequence, dtype=np.float32)
     else:
-        diagnosis_sequence = np.empty((0, DIAGNOSIS_DIM), dtype=np.float32)
+        diagnosis_tensor = np.zeros((1, DIAGNOSIS_DIM), dtype=np.float32)
 
-    diagnosis_sequence = diagnosis_sequence[:SEQUENCE_LENGTH].copy()
-    diag_len = diagnosis_sequence.shape[0]
+    # diagnosis_sequence = diagnosis_sequence[:SEQUENCE_LENGTH].copy()
+    diag_len = diagnosis_tensor.shape[0]
 
-    diagnosis_tensor = np.zeros((SEQUENCE_LENGTH, DIAGNOSIS_DIM), dtype=np.float32)
-    if diagnosis_sequence.shape[0] < SEQUENCE_LENGTH:
-        padding_rows = SEQUENCE_LENGTH - diagnosis_sequence.shape[0]
-        padding = np.zeros((padding_rows, DIAGNOSIS_DIM), dtype=np.float32)
-        diagnosis_tensor = np.vstack([diagnosis_sequence, padding])
+    # diagnosis_tensor = np.zeros((SEQUENCE_LENGTH, DIAGNOSIS_DIM), dtype=np.float32)
+    # if diagnosis_sequence.shape[0] < SEQUENCE_LENGTH:
+    #     padding_rows = SEQUENCE_LENGTH - diagnosis_sequence.shape[0]
+    #     padding = np.zeros((padding_rows, DIAGNOSIS_DIM), dtype=np.float32)
+    #     diagnosis_tensor = np.vstack([diagnosis_sequence, padding])
 
     return {
         'drug': drug_tensor,

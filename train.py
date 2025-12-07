@@ -1,19 +1,51 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
 import numpy as np
 from model import EnsembleHFPredictor
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.metrics import roc_auc_score, average_precision_score, accuracy_score
 import os
 
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
-NUM_EPOCHS = 20
+NUM_EPOCHS = 30
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PLOT_DIR = "./plots"
 WEIGHT_DIR = "./weights"
+os.makedirs(WEIGHT_DIR, exist_ok=True)
+
+# dynamically pads to LONGEST sequence in the batch.
+def ehr_collate_fn(batch):
+    """
+    Args:
+        batch: A list of dictionaries (results of __getitem__)
+               [
+                 {'drug': Tensor(5, 165), 'label': ...}, 
+                 {'drug': Tensor(10, 165), 'label': ...}, 
+                 ...
+               ]
+    Returns:
+        A dictionary containing the batched (padded) tensors.
+    """
+    batch_out = {}
+    
+    for key in ['drug', 'lab', 'diagnosis']:
+        tensors = [item[key] for item in batch]
+        padded_batch = pad_sequence(tensors, batch_first=True, padding_value=0.0)
+        
+        batch_out[key] = padded_batch
+        
+        len_key = f"{key}_len" if key != 'diagnosis' else 'diagnosis_len'
+        batch_out[len_key] = torch.tensor([item[len_key] for item in batch])
+
+    # static
+    batch_out['static'] = torch.stack([item['static'] for item in batch])
+    batch_out['label'] = torch.stack([item['label'] for item in batch])
+    
+    return batch_out
 
 class EHRDataset(Dataset):
     def __init__(self, processed_data_path):
@@ -80,8 +112,8 @@ def plot_history(history):
 def train_model():
     train_dataset = EHRDataset('train.npy')
     val_dataset = EHRDataset('validate.npy')
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=ehr_collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=ehr_collate_fn)
 
     model = EnsembleHFPredictor().to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
@@ -92,6 +124,7 @@ def train_model():
     history = {
         'train_loss': [],
         'val_loss': [],
+        'val_acc': [],
         'val_roc_auc': [],
         'val_pr_auc': []
     }
@@ -120,7 +153,7 @@ def train_model():
             loss.backward()
 
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         
             optimizer.step()
             train_loss += loss.item()
@@ -160,7 +193,8 @@ def train_model():
         
         all_y_true = np.vstack(all_y_true)
         all_y_scores = np.vstack(all_y_scores)
-    
+        val_preds = (all_y_scores > 0.5).astype(int)
+        val_acc = accuracy_score(all_y_true, val_preds)
         # Calculate Metrics (Macro Average handles both labels: death_30 & death_180)
         try:
             epoch_roc_auc = roc_auc_score(all_y_true, all_y_scores, average='macro')
@@ -176,9 +210,10 @@ def train_model():
         history['val_loss'].append(avg_val_loss)
         history['val_roc_auc'].append(epoch_roc_auc)
         history['val_pr_auc'].append(epoch_pr_auc)
+        history['val_acc'].append(val_acc)
 
         print(f"Epoch {epoch}: Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | "
-              f"ROC-AUC: {epoch_roc_auc:.4f} | PR-AUC: {epoch_pr_auc:.4f}")
+              f"Val Acc: {val_acc:.4f}")
         
         # saves weight
         if avg_val_loss < best_val_loss:
@@ -190,7 +225,7 @@ def train_model():
         torch.save(model.state_dict(), os.path.join(WEIGHT_DIR, "last_model.pth"))
    
     plot_history(history)
-    print("Training complete. Weights saved in ./checkpoints/")
+    print(f"Training complete. Weights saved in {WEIGHT_DIR}/")
 
 if __name__ == '__main__':
     train_model()
