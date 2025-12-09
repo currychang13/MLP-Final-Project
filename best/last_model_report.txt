@@ -1,0 +1,29 @@
+========================================
+       TEST SET PERFORMANCE       
+========================================
+Overall Accuracy: 0.7570 (Exact Match)
+Overall ROC-AUC:  0.8139
+Overall PR-AUC:   0.6482
+----------------------------------------
+Classification Report:
+
+                precision    recall  f1-score   support
+
+ Death_30_Days       0.68      0.51      0.59        84
+Death_180_Days       0.62      0.50      0.55       218
+
+     micro avg       0.63      0.50      0.56       302
+     macro avg       0.65      0.51      0.57       302
+  weighted avg       0.63      0.50      0.56       302
+   samples avg       0.12      0.12      0.11       302
+
+----------------------------------------
+CONFUSION MATRICES SUMMARY:
+
+--- Death_30_Days (AUC: 0.8448) ---
+TP: 43 | FP: 20
+FN: 41 | TN: 756
+
+--- Death_180_Days (AUC: 0.7830) ---
+TP: 109 | FP: 68
+FN: 109 | TN: 574

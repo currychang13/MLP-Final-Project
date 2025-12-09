@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, average_precision_score, accuracy_score
 import os
 
-BATCH_SIZE = 64
-LEARNING_RATE = 1e-4
-NUM_EPOCHS = 30
+BATCH_SIZE = 32
+LEARNING_RATE = 3e-5
+NUM_EPOCHS = 100
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PLOT_DIR = "./plots"
 WEIGHT_DIR = "./weights"
@@ -117,9 +117,9 @@ def train_model():
 
     model = EnsembleHFPredictor().to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
-    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     # for ploting
     history = {
         'train_loss': [],
@@ -130,11 +130,12 @@ def train_model():
     }
 
     best_val_loss = float('inf')
-
+    patience = 10
+    counter = 0
     for epoch in range(1, NUM_EPOCHS + 1):
         model.train()
         train_loss = 0
-        loop = tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS} [TRAIN]", leave=True)
+        loop = tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS}", leave=True)
         
         for batch in loop:
             x_drug = batch['drug'].to(DEVICE)
@@ -147,21 +148,19 @@ def train_model():
             l_drug, l_lab, l_diag = batch['drug_len'], batch['lab_len'], batch['diagnosis_len']
             
             optimizer.zero_grad()
-            y_pred = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
+            logits = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
             
-            loss = criterion(y_pred, y)
+            loss = criterion(logits, y)
+            probs = torch.sigmoid(logits)
+
             loss.backward()
-
-            # Gradient clipping
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)    
             optimizer.step()
+        
             train_loss += loss.item()
-
             loop.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
         
-        scheduler.step()
-
+        # scheduler.step()
         avg_train_loss = train_loss / len(train_loader)
         
         model.eval()
@@ -171,7 +170,7 @@ def train_model():
         all_y_scores = []
 
         with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS} [VAL]", leave=True):
+            for batch in val_loader:
                 x_drug = batch['drug'].to(DEVICE)
                 x_lab = batch['lab'].to(DEVICE)
                 x_diag = batch['diagnosis'].to(DEVICE)
@@ -186,24 +185,20 @@ def train_model():
                 val_loss += loss.item()
                 
                 probs = torch.sigmoid(logits)
+                
                 all_y_true.append(y.cpu().numpy())
                 all_y_scores.append(probs.cpu().numpy())
         
         avg_val_loss = val_loss / len(val_loader)
-        
+        scheduler.step(avg_val_loss)
+
         all_y_true = np.vstack(all_y_true)
         all_y_scores = np.vstack(all_y_scores)
         val_preds = (all_y_scores > 0.5).astype(int)
         val_acc = accuracy_score(all_y_true, val_preds)
-        # Calculate Metrics (Macro Average handles both labels: death_30 & death_180)
-        try:
-            epoch_roc_auc = roc_auc_score(all_y_true, all_y_scores, average='macro')
-            epoch_pr_auc = average_precision_score(all_y_true, all_y_scores, average='macro')
-        except ValueError:
-            # Handles edge case where a batch has only 1 class (e.g. all 0s)
-            print("Warning: Only one class present in y_true. ROC AUC score is not defined in that case.")
-            epoch_roc_auc = 0.0
-            epoch_pr_auc = 0.0
+
+        epoch_roc_auc = roc_auc_score(all_y_true, all_y_scores, average='macro')
+        epoch_pr_auc = average_precision_score(all_y_true, all_y_scores, average='macro')
 
         # Store history
         history['train_loss'].append(avg_train_loss)
@@ -218,11 +213,22 @@ def train_model():
         # saves weight
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            counter = 0
             save_path = os.path.join(WEIGHT_DIR, "best_model.pth")
             torch.save(model.state_dict(), save_path)
             print(f"--> Best model saved (Val loss: {best_val_loss:.4f})")
-        
+        else:
+            counter +=1
+            print(f"--> No improvement. EarlyStopping counter: {counter} out of {patience}")        
+            if counter >= patience:
+                print("=============================================")
+                print("Early stopping triggered. Training terminated.")
+                print("=============================================")
+                break 
+
+            
         torch.save(model.state_dict(), os.path.join(WEIGHT_DIR, "last_model.pth"))
+        print("===============================================================================================")
    
     plot_history(history)
     print(f"Training complete. Weights saved in {WEIGHT_DIR}/")

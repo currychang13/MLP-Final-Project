@@ -5,12 +5,11 @@ from gensim.models import Word2Vec
 from tqdm import tqdm
 import os
 
-# SEQUENCE_LENGTH = 100 
 DIAGNOSIS_DIM = 32 
-DRUG_DIM = 165
-LABS_DIM = 46 
+DRUG_DIM = 198
+LABS_DIM = 47 
 STATIC_DIM = 3 
-OBSERVATION_WINDOW_MONTHS = 6
+OBSERVATION_WINDOW_MONTHS = 9
 MODEL_FILE = './skip_gram/diagnosis_skipgram.model'
 
 print("Loading CSV files...")
@@ -20,6 +19,7 @@ df_lab = pd.read_csv("./data/final_lab.csv")
 df_opd = pd.read_csv("./data/final_opd_record.csv")
 df_drug = pd.read_csv("./data/final_drug.csv") 
 
+print(len(df_lab.columns))
 # datetime convertion, for datetime calculation
 df_demographics['INDATE'] = pd.to_datetime(df_demographics['INDATE'])
 df_lab['LOGDATE'] = pd.to_datetime(df_lab['LOGDATE'])
@@ -44,6 +44,44 @@ print(f"Total Patients: {n_patients}")
 print(f"Train Patients: {len(train_pids)}")
 print(f"Val Patients:   {len(val_pids)}")
 print(f"Test Patients:  {len(test_pids)}")
+print(f"Original Train Size: {len(train_pids)}")
+print("==========================")
+
+print("Performing Admission-Level Undersampling on Training Set...")
+
+# Isolate Training Rows (Admissions belonging to training patients)
+train_rows = df_demographics[df_demographics['PERSONID2'].isin(train_pids)]
+
+# Identify Indices
+pos_indices = train_rows[train_rows['death_180'] == 1].index.values
+neg_indices = train_rows[train_rows['death_180'] == 0].index.values
+
+print(f"  - Survivors per admission (Neg): {len(neg_indices)}")
+print(f"  - Deaths per admission (Pos):    {len(pos_indices)}")
+
+# --- CONFIG: RATIO (Negative : Positive) ---
+TARGET_RATIO = 0
+n_pos = len(pos_indices)
+n_neg_needed = n_pos * TARGET_RATIO
+
+# Check if we have enough negatives
+if len(neg_indices) > n_pos and not TARGET_RATIO == 0:
+    # Safety: Don't try to sample more than we have
+    n_sample = min(len(neg_indices), n_neg_needed)
+    
+    print(f"  -> Undersampling Survivors to match Deaths ({TARGET_RATIO}:1)...")
+    print(f"  -> Aiming for {n_neg_needed} negatives, taking {n_sample}.")
+    
+    np.random.seed(42) 
+    sampled_neg_indices = np.random.choice(neg_indices, size=n_sample, replace=False)
+    
+    # Combine
+    train_admission_indices = set(np.concatenate([pos_indices, sampled_neg_indices]))
+    
+    print(f"New Balanced Train Size: {len(train_admission_indices)} admissions")
+else:
+    print("  -> No undersampling needed (Positives >= Negatives).")
+    train_admission_indices = set(train_rows.index.values)
 
 
 def standardize(value, mean, std):
@@ -57,10 +95,9 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
     # 6 months before last leaving hospital
     start_date = admission_date - pd.DateOffset(months=OBSERVATION_WINDOW_MONTHS)
 
-
     # ------------- STATIC DATA FILTERING ---------------
-    target_label = np.array([obs_row['death_180'], obs_row['death_30']], dtype=np.float32)     # Multi-label 
-
+    target_label = np.array([obs_row['death_30'], obs_row['death_180']], dtype=np.float32)     # Multi-label 
+    
     gender_code = 1.0 if obs_row['ADMINISTRATIVESEXCODE'] == 'M' else 0.0
 
     # standardization
@@ -94,11 +131,9 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
     # 2. Concate to fixed sequence length
     
     # ------------------- lab --------------------
-    lab_cols = [c for c in df_lab.columns if c not in ['PERSONID2', 'LOGDATE', '%CKMB']]
-    # lab_sequence_data = df_lab_history[lab_cols].head(SEQUENCE_LENGTH).values   # truncated to SEQUENCE_LENGTH
+    lab_cols = [c for c in df_lab.columns if c not in ['PERSONID2', 'LOGDATE']]
     lab_sequence_data = df_lab_history[lab_cols].values
 
-    # lab_tensor = np.zeros((SEQUENCE_LENGTH, LABS_DIM), dtype=np.float32)
     if lab_sequence_data.size > 0:
         # Standardize
         for i, col_name in enumerate(lab_cols):
@@ -109,32 +144,16 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
                 lab_sequence_data[:, i] = (lab_sequence_data[:, i] - mu) / sigma
             else:
                 lab_sequence_data[:, i] = 0
-
-        # post padding
-        # if lab_sequence_data.shape[0] < SEQUENCE_LENGTH:
-        #     padding_rows = SEQUENCE_LENGTH - lab_sequence_data.shape[0]
-        #     lab_sequence_data = np.vstack([lab_sequence_data, np.zeros((padding_rows, lab_sequence_data.shape[1]))])
     else:
         lab_sequence_data = np.zeros((1, LABS_DIM), dtype=np.float32)
-
-        # current_cols = min(LABS_DIM, lab_sequence_data.shape[1])
-        # lab_tensor[:, :current_cols] = lab_sequence_data[:, :current_cols]
     
     lab_tensor = lab_sequence_data.astype(np.float32)
     lab_len = lab_tensor.shape[0]    
 
     # --------------- DRUG --------------
     drug_cols = [c for c in df_drug.columns if c not in ['PERSONID2', 'CREATEDATE']]
-    # drug_sequence_data = df_drug_history[drug_cols].head(SEQUENCE_LENGTH).values
     drug_sequence_data = df_drug_history[drug_cols].values
 
-    # drug_tensor = np.zeros((SEQUENCE_LENGTH, DRUG_DIM), dtype=np.float32)
-    # if drug_sequence_data.size > 0:
-    #     if drug_sequence_data.shape[0] < SEQUENCE_LENGTH:
-    #         padding_rows = SEQUENCE_LENGTH - drug_sequence_data.shape[0]
-    #         drug_sequence_data = np.vstack([drug_sequence_data, np.zeros((padding_rows, DRUG_DIM))])            
-        # current_cols = min(DRUG_DIM, drug_sequence_data.shape[1])
-        # drug_tensor[:, :current_cols] = drug_sequence_data[:, :current_cols]
     if drug_sequence_data.size == 0:
         drug_tensor = np.zeros((1, DRUG_DIM), dtype=np.float32)
     else:
@@ -162,14 +181,7 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
     else:
         diagnosis_tensor = np.zeros((1, DIAGNOSIS_DIM), dtype=np.float32)
 
-    # diagnosis_sequence = diagnosis_sequence[:SEQUENCE_LENGTH].copy()
     diag_len = diagnosis_tensor.shape[0]
-
-    # diagnosis_tensor = np.zeros((SEQUENCE_LENGTH, DIAGNOSIS_DIM), dtype=np.float32)
-    # if diagnosis_sequence.shape[0] < SEQUENCE_LENGTH:
-    #     padding_rows = SEQUENCE_LENGTH - diagnosis_sequence.shape[0]
-    #     padding = np.zeros((padding_rows, DIAGNOSIS_DIM), dtype=np.float32)
-    #     diagnosis_tensor = np.vstack([diagnosis_sequence, padding])
 
     return {
         'drug': drug_tensor,
@@ -197,6 +209,12 @@ if __name__ == '__main__':
     val_list = []
     test_list = []
 
+    train_stats = {
+        'total': 0,
+        'death_180': 0,
+        'death_30': 0
+    }
+
     total_observations = len(df_demographics)
     print(f"Starting generation for {total_observations} admissions using a {OBSERVATION_WINDOW_MONTHS}-month lookback...")
     
@@ -215,7 +233,7 @@ if __name__ == '__main__':
         }
     }
 
-    lab_cols = [c for c in df_lab.columns if c not in ['PERSONID2', 'LOGDATE', '%CKMB']]
+    lab_cols = [c for c in df_lab.columns if c not in ['PERSONID2', 'LOGDATE']]
     lab_stats = {}
 
     for col in lab_cols:
@@ -227,10 +245,25 @@ if __name__ == '__main__':
     # Iterate over every admission (observation) in the demographic file
     for index, obs_row in tqdm(df_demographics.iterrows(), total=len(df_demographics), desc="Preprocessing"):
         pid = obs_row['PERSONID2']
+        
+        is_train = index in train_admission_indices
+        is_val = pid in val_pids
+        is_test = pid in test_pids
+        
+        if not (is_train or is_val or is_test):
+            continue
+        
         observation_tensors = process_single_observation(obs_row, word_vectors, lab_stats, static_stats)
-
+        
         # patient level train/val/test
-        if pid in train_pids: train_list.append(observation_tensors)
+        if pid in train_pids: 
+            train_list.append(observation_tensors)
+            train_stats['total']+=1
+            if obs_row['death_30'] == 1:
+                train_stats['death_30'] +=1
+            if obs_row['death_180'] == 1:
+                train_stats['death_180'] +=1
+
         elif pid in val_pids: val_list.append(observation_tensors)
         elif pid in test_pids: test_list.append(observation_tensors)
 
@@ -244,3 +277,11 @@ if __name__ == '__main__':
     print(f"Val Observations:   {len(val_list)}")
     print(f"Test Observations:  {len(test_list)}")
     print("Files saved: train.npy, validate.npy, test.npy")
+    
+    
+    print("\n--- Class Statistics (Train) ---")
+    print(f"Total: {train_stats['total']}")
+    d30_ratio = train_stats['death_30']/train_stats['total']
+    d180_ratio = train_stats['death_180']/train_stats['total']
+    print(f"Death 180: {train_stats['death_180']} (Ratio: {d180_ratio:.4f})")
+    print(f"Death 30:  {train_stats['death_30']}  (Ratio: {d30_ratio:.4f})")

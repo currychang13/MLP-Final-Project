@@ -2,36 +2,59 @@ import torch
 import torch.nn as nn
 import torch.nn.utils.rnn as rnn_utils
 
-# SEQUENCE_LENGTH = 100 
-
-DRUG_DIM = 165     
-LABS_DIM = 46      
+DRUG_DIM = 198     
+LABS_DIM = 47      
 DIAGNOSIS_DIM = 32 
 
-STATIC_INPUT_DIM = 3 
+# STATIC
+MLP_INPUT_DIM = 3 
+MLP_HIDEEN_1 = 128
+MLP_OUTPUT = 16
 
-# Hidden layer 
+# LSTM
 LSTM_HIDDEN_SIZE = 256
-STATIC_MLP_OUTPUT = 16
-FINAL_DENSE_OUTPUT = 16
+LSTM_LAYER = 2
+
+# Output layer
+FINAL_DENSE_OUTPUT = 32
 
 class EnsembleHFPredictor(nn.Module):
     def __init__(self):
         super(EnsembleHFPredictor, self).__init__()
         
         # ------------ Single layer LSTM ---------------
-        self.lstm_drug = nn.LSTM(input_size=DRUG_DIM, hidden_size=LSTM_HIDDEN_SIZE, batch_first=True)
-        self.lstm_lab = nn.LSTM(input_size=LABS_DIM, hidden_size=LSTM_HIDDEN_SIZE, batch_first=True)
-        self.lstm_diagnosis = nn.LSTM(input_size=DIAGNOSIS_DIM, hidden_size=LSTM_HIDDEN_SIZE, batch_first=True)
+        self.lstm_drug = nn.LSTM(
+            input_size=DRUG_DIM, 
+            hidden_size=LSTM_HIDDEN_SIZE,
+            num_layers=LSTM_LAYER, 
+            batch_first=True, 
+            dropout=0.2)
+        
+        self.lstm_lab = nn.LSTM(
+            input_size=LABS_DIM, 
+            hidden_size=LSTM_HIDDEN_SIZE, 
+            num_layers=LSTM_LAYER, 
+            batch_first=True, 
+            dropout=0.2)
+        
+        self.lstm_diagnosis = nn.LSTM(
+            input_size=DIAGNOSIS_DIM, 
+            hidden_size=LSTM_HIDDEN_SIZE, 
+            num_layers=LSTM_LAYER, 
+            batch_first=True, 
+            dropout=0.2)
         
         # ---------------- MLP --------------------
         self.dense_static = nn.Sequential(
-            nn.Linear(STATIC_INPUT_DIM, STATIC_MLP_OUTPUT),
+            nn.Linear(MLP_INPUT_DIM, MLP_HIDEEN_1),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(MLP_HIDEEN_1, MLP_OUTPUT),
             nn.ReLU()
         )
         
         # ensemble method
-        ensemble_input_size = 3 * LSTM_HIDDEN_SIZE + STATIC_MLP_OUTPUT # 3*256 + 16 = 784
+        ensemble_input_size = 3 * LSTM_HIDDEN_SIZE + MLP_OUTPUT
         
         # Final Dense Hidden Layer
         self.final_hidden = nn.Sequential(
@@ -49,7 +72,7 @@ class EnsembleHFPredictor(nn.Module):
         )
         _, (h_n, _) = lstm_layer(packed_input)  # implicit state, Initialize h_0, c_0 at each batch.
         
-        return h_n.squeeze(0)
+        return h_n[-1]
     
     def forward(self, x_drug, drug_lens, x_lab, lab_lens, x_diagnosis, diag_lens, x_static):
         

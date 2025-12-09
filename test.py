@@ -10,12 +10,10 @@ from tqdm import tqdm
 import os
 
 # --- Configuration ---
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CHECKPOINT_PATH = "./weights/best_model.pth"
 TEST_DATA_PATH = "test.npy"
 PLOT_DIR = "./result"
-REPORT_FILE = os.path.join(PLOT_DIR, "test_report.txt")
 
 # --- Dataset Definition ---
 class EHRDataset(Dataset):
@@ -66,7 +64,9 @@ def plot_confusion_matrix(cm, class_name, filename):
     plt.savefig(save_path)
     plt.close()
 
-def evaluate_model():
+def evaluate_model(chkpt_path):
+    MODEL = os.path.basename(chkpt_path).strip(".pth")
+    
     print(f"Testing on device: {DEVICE}")
     os.makedirs(PLOT_DIR, exist_ok=True)
 
@@ -79,12 +79,12 @@ def evaluate_model():
     
     model = EnsembleHFPredictor().to(DEVICE)
 
-    if not os.path.exists(CHECKPOINT_PATH):
-        print(f"Error: {CHECKPOINT_PATH} not found.")
+    if not os.path.exists(chkpt_path):
+        print(f"Error: {chkpt_path} not found.")
         return
         
-    print(f"Loading weights from {CHECKPOINT_PATH}...")
-    model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
+    print(f"Loading weights from {chkpt_path}...")
+    model.load_state_dict(torch.load(chkpt_path, map_location=DEVICE))
     model.eval()
 
     all_y_true = []
@@ -103,6 +103,7 @@ def evaluate_model():
 
             logits = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
             probs = torch.sigmoid(logits)
+            probs[:, 1] = torch.max(probs[:, 0], probs[:,1])
             
             all_y_true.append(y.cpu().numpy())
             all_y_scores.append(probs.cpu().numpy())
@@ -111,7 +112,7 @@ def evaluate_model():
     y_scores = np.vstack(all_y_scores)
     y_pred_binary = (y_scores > 0.5).astype(int)
     
-    target_names = ['Death_180_Days', 'Death_30_Days']
+    target_names = ['Death_30_Days', 'Death_180_Days']
     
     # --- CALCULATE METRICS ---
     roc_auc = roc_auc_score(y_true, y_scores, average='macro')
@@ -142,16 +143,17 @@ def evaluate_model():
         cm = confusion_matrix(y_true[:, i], y_pred_binary[:, i])
         
         output.append(f"--- {name} (AUC: {auc:.4f}) ---")
-        output.append(f"TN: {cm[0][0]} | FP: {cm[0][1]}")
-        output.append(f"FN: {cm[1][0]} | TP: {cm[1][1]}\n")
+        output.append(f"TP: {cm[1][1]} | FP: {cm[0][1]}")
+        output.append(f"FN: {cm[1][0]} | TN: {cm[0][0]}\n")
         
         # Save Plot Image
-        plot_confusion_matrix(cm, name, f"cm_{name}.png")
+        plot_confusion_matrix(cm, name, f"{MODEL}_cm_{name}.png")
 
     # --- PRINT AND SAVE ---
     final_output = "\n".join(output)
     print(final_output)
-    
+    FILENAME = MODEL + "_report.txt"
+    REPORT_FILE = os.path.join(PLOT_DIR, FILENAME)
     with open(REPORT_FILE, "w") as f:
         f.write(final_output)
     
@@ -159,4 +161,6 @@ def evaluate_model():
     print(f"Confusion matrices saved to {PLOT_DIR}")
 
 if __name__ == '__main__':
-    evaluate_model()
+    chkpt_path = ["./weights/best_model.pth", "./weights/last_model.pth"]
+    for chkpt in chkpt_path:
+        evaluate_model(chkpt)
