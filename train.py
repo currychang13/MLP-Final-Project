@@ -10,8 +10,8 @@ from sklearn.metrics import roc_auc_score, average_precision_score, accuracy_sco
 import os
 
 BATCH_SIZE = 32
-LEARNING_RATE = 3e-5
-NUM_EPOCHS = 100
+LEARNING_RATE = 3e-5    #2e-5
+EPOCHS = 100
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 PLOT_DIR = "./plots"
 WEIGHT_DIR = "./weights"
@@ -38,7 +38,7 @@ def ehr_collate_fn(batch):
         
         batch_out[key] = padded_batch
         
-        len_key = f"{key}_len" if key != 'diagnosis' else 'diagnosis_len'
+        len_key = f"{key}_len" 
         batch_out[len_key] = torch.tensor([item[len_key] for item in batch])
 
     # static
@@ -112,15 +112,17 @@ def plot_history(history):
 def train_model():
     train_dataset = EHRDataset('train.npy')
     val_dataset = EHRDataset('validate.npy')
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=ehr_collate_fn)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=ehr_collate_fn, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=ehr_collate_fn)
 
     model = EnsembleHFPredictor().to(DEVICE)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
-    # for ploting
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=50, T_mult=1, eta_min=1e-6)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-9)
+
     history = {
         'train_loss': [],
         'val_loss': [],
@@ -132,10 +134,10 @@ def train_model():
     best_val_loss = float('inf')
     patience = 10
     counter = 0
-    for epoch in range(1, NUM_EPOCHS + 1):
+    for epoch in range(1, EPOCHS + 1):
         model.train()
         train_loss = 0
-        loop = tqdm(train_loader, desc=f"Epoch {epoch}/{NUM_EPOCHS}", leave=True)
+        loop = tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS}", leave=True)
         
         for batch in loop:
             x_drug = batch['drug'].to(DEVICE)
@@ -144,7 +146,6 @@ def train_model():
             x_static = batch['static'].to(DEVICE)
             y = batch['label'].to(DEVICE)
             
-            # lengths need to stay CPU for pack_padded_sequence
             l_drug, l_lab, l_diag = batch['drug_len'], batch['lab_len'], batch['diagnosis_len']
             
             optimizer.zero_grad()
@@ -200,7 +201,6 @@ def train_model():
         epoch_roc_auc = roc_auc_score(all_y_true, all_y_scores, average='macro')
         epoch_pr_auc = average_precision_score(all_y_true, all_y_scores, average='macro')
 
-        # Store history
         history['train_loss'].append(avg_train_loss)
         history['val_loss'].append(avg_val_loss)
         history['val_roc_auc'].append(epoch_roc_auc)
@@ -210,21 +210,20 @@ def train_model():
         print(f"Epoch {epoch}: Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | "
               f"Val Acc: {val_acc:.4f}")
         
-        # saves weight
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             counter = 0
             save_path = os.path.join(WEIGHT_DIR, "best_model.pth")
             torch.save(model.state_dict(), save_path)
             print(f"--> Best model saved (Val loss: {best_val_loss:.4f})")
-        else:
-            counter +=1
-            print(f"--> No improvement. EarlyStopping counter: {counter} out of {patience}")        
-            if counter >= patience:
-                print("=============================================")
-                print("Early stopping triggered. Training terminated.")
-                print("=============================================")
-                break 
+        # else:
+        #     counter +=1
+        #     print(f"--> No improvement. EarlyStopping counter: {counter} out of {patience}")        
+        #     if counter >= patience:
+        #         print("=============================================")
+        #         print("Early stopping triggered. Training terminated.")
+        #         print("=============================================")
+        #         break 
 
             
         torch.save(model.state_dict(), os.path.join(WEIGHT_DIR, "last_model.pth"))

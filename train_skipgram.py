@@ -36,14 +36,12 @@ def build_temporal_corpus(train_pids, df_demographics):
     print("Loading OPD records...")
     df_opd = pd.read_csv("./data/final_opd_record.csv")
     
-    # Convert dates
     df_demographics['INDATE'] = pd.to_datetime(df_demographics['INDATE'])
     df_opd['CREATEDATETIME'] = pd.to_datetime(df_opd['CREATEDATETIME'])
     
     print("Building Corpus (Temporal Filtering)...")
     corpus = []
     
-    # Filter OPD to speed up processing
     # Only keep records relevant to training patients
     opd_subset = df_opd[df_opd['PERSONID2'].isin(train_pids)].copy()
     opd_grouped = opd_subset.groupby('PERSONID2')
@@ -55,18 +53,15 @@ def build_temporal_corpus(train_pids, df_demographics):
     for _, row in train_demos.iterrows():
         pid = row['PERSONID2']
         
-        # Define Window
         admission_date = row['INDATE'] + pd.to_timedelta(row['adm_days'], unit='D')
         start_date = admission_date - pd.DateOffset(months=OBSERVATION_WINDOW_MONTHS)
         
         if pid in opd_grouped.groups:
             hist = opd_grouped.get_group(pid)
             
-            # STRICT TEMPORAL FILTER
             mask = (hist['CREATEDATETIME'] >= start_date) & (hist['CREATEDATETIME'] < admission_date)
             valid_hist = hist[mask].sort_values('CREATEDATETIME')
             
-            # Extract Codes
             seq_codes = []
             for codes_str in valid_hist['icd10_codes']:
                 try:
@@ -98,7 +93,7 @@ def train_model(corpus):
         min_count=1,   # Include rare codes
         sg=1,          # 1 = Skip-gram
         workers=4,
-        epochs=10
+        epochs=20
     )
     model.save(MODEL_FILE)
     print(f"Model saved to {MODEL_FILE}")

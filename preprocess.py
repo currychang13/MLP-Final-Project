@@ -9,7 +9,7 @@ DIAGNOSIS_DIM = 32
 DRUG_DIM = 198
 LABS_DIM = 47 
 STATIC_DIM = 3 
-OBSERVATION_WINDOW_MONTHS = 9
+OBSERVATION_WINDOW_MONTHS = 6
 MODEL_FILE = './skip_gram/diagnosis_skipgram.model'
 
 print("Loading CSV files...")
@@ -19,8 +19,6 @@ df_lab = pd.read_csv("./data/final_lab.csv")
 df_opd = pd.read_csv("./data/final_opd_record.csv")
 df_drug = pd.read_csv("./data/final_drug.csv") 
 
-print(len(df_lab.columns))
-# datetime convertion, for datetime calculation
 df_demographics['INDATE'] = pd.to_datetime(df_demographics['INDATE'])
 df_lab['LOGDATE'] = pd.to_datetime(df_lab['LOGDATE'])
 df_opd['CREATEDATETIME'] = pd.to_datetime(df_opd['CREATEDATETIME']) 
@@ -49,7 +47,6 @@ print("==========================")
 
 print("Performing Admission-Level Undersampling on Training Set...")
 
-# Isolate Training Rows (Admissions belonging to training patients)
 train_rows = df_demographics[df_demographics['PERSONID2'].isin(train_pids)]
 
 # Identify Indices
@@ -60,13 +57,12 @@ print(f"  - Survivors per admission (Neg): {len(neg_indices)}")
 print(f"  - Deaths per admission (Pos):    {len(pos_indices)}")
 
 # --- CONFIG: RATIO (Negative : Positive) ---
-TARGET_RATIO = 0
+TARGET_RATIO = 0        # 0 disable under sampling
 n_pos = len(pos_indices)
 n_neg_needed = n_pos * TARGET_RATIO
 
 # Check if we have enough negatives
 if len(neg_indices) > n_pos and not TARGET_RATIO == 0:
-    # Safety: Don't try to sample more than we have
     n_sample = min(len(neg_indices), n_neg_needed)
     
     print(f"  -> Undersampling Survivors to match Deaths ({TARGET_RATIO}:1)...")
@@ -75,7 +71,6 @@ if len(neg_indices) > n_pos and not TARGET_RATIO == 0:
     np.random.seed(42) 
     sampled_neg_indices = np.random.choice(neg_indices, size=n_sample, replace=False)
     
-    # Combine
     train_admission_indices = set(np.concatenate([pos_indices, sampled_neg_indices]))
     
     print(f"New Balanced Train Size: {len(train_admission_indices)} admissions")
@@ -218,7 +213,6 @@ if __name__ == '__main__':
     total_observations = len(df_demographics)
     print(f"Starting generation for {total_observations} admissions using a {OBSERVATION_WINDOW_MONTHS}-month lookback...")
     
-    # Filter the dataframes to get only training data for calculating statistics
     train_demographics = df_demographics[df_demographics['PERSONID2'].isin(train_pids)]
     train_lab = df_lab[df_lab['PERSONID2'].isin(train_pids)]
 
@@ -242,7 +236,6 @@ if __name__ == '__main__':
             'std': train_lab[col].std()
         }
 
-    # Iterate over every admission (observation) in the demographic file
     for index, obs_row in tqdm(df_demographics.iterrows(), total=len(df_demographics), desc="Preprocessing"):
         pid = obs_row['PERSONID2']
         
@@ -255,7 +248,6 @@ if __name__ == '__main__':
         
         observation_tensors = process_single_observation(obs_row, word_vectors, lab_stats, static_stats)
         
-        # patient level train/val/test
         if pid in train_pids: 
             train_list.append(observation_tensors)
             train_stats['total']+=1
@@ -267,7 +259,6 @@ if __name__ == '__main__':
         elif pid in val_pids: val_list.append(observation_tensors)
         elif pid in test_pids: test_list.append(observation_tensors)
 
-    # Convert to NumPy array
     np.save('train.npy', np.array(train_list))
     np.save('validate.npy', np.array(val_list))
     np.save('test.npy', np.array(test_list))

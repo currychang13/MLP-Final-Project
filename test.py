@@ -1,54 +1,18 @@
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
+from train import EHRDataset, ehr_collate_fn
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import roc_auc_score, average_precision_score, classification_report, confusion_matrix, accuracy_score
-from torch.nn.utils.rnn import pad_sequence
 from model import EnsembleHFPredictor
 from tqdm import tqdm
 import os
 
-# --- Configuration ---
 BATCH_SIZE = 32
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 TEST_DATA_PATH = "test.npy"
 PLOT_DIR = "./result"
-
-# --- Dataset Definition ---
-class EHRDataset(Dataset):
-    def __init__(self, processed_data_path):
-        self.data = np.load(processed_data_path, allow_pickle=True)
-        
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        obs = self.data[idx]
-        return {
-            'drug': torch.from_numpy(obs['drug']).float(),
-            'drug_len': obs['drug_len'],
-            'lab': torch.from_numpy(obs['lab']).float(),
-            'lab_len': obs['lab_len'],
-            'diagnosis': torch.from_numpy(obs['diagnosis']).float(),
-            'diagnosis_len': obs['diag_len'],
-            'static': torch.from_numpy(obs['static']).float(),
-            'label': torch.tensor(obs['label']).float()
-        }
-
-# --- Dynamic Collate Function ---
-def ehr_collate_fn(batch):
-    batch_out = {}
-    for key in ['drug', 'lab', 'diagnosis']:
-        tensors = [item[key] for item in batch]
-        padded_batch = pad_sequence(tensors, batch_first=True, padding_value=0.0)
-        batch_out[key] = padded_batch
-        len_key = f"{key}_len" if key != 'diagnosis' else 'diagnosis_len'
-        batch_out[len_key] = torch.tensor([item[len_key] for item in batch])
-
-    batch_out['static'] = torch.stack([item['static'] for item in batch])
-    batch_out['label'] = torch.stack([item['label'] for item in batch])
-    return batch_out
 
 def plot_confusion_matrix(cm, class_name, filename):
     plt.figure(figsize=(6, 5))
@@ -114,14 +78,12 @@ def evaluate_model(chkpt_path):
     
     target_names = ['Death_30_Days', 'Death_180_Days']
     
-    # --- CALCULATE METRICS ---
     roc_auc = roc_auc_score(y_true, y_scores, average='macro')
     pr_auc = average_precision_score(y_true, y_scores, average='macro')
-    acc = accuracy_score(y_true, y_pred_binary) # Exact Match Accuracy
+    acc = accuracy_score(y_true, y_pred_binary) 
     
     report_str = classification_report(y_true, y_pred_binary, target_names=target_names, zero_division=0)
 
-    # --- GENERATE OUTPUT STRING ---
     output = []
     output.append("="*40)
     output.append("       TEST SET PERFORMANCE       ")
@@ -146,10 +108,8 @@ def evaluate_model(chkpt_path):
         output.append(f"TP: {cm[1][1]} | FP: {cm[0][1]}")
         output.append(f"FN: {cm[1][0]} | TN: {cm[0][0]}\n")
         
-        # Save Plot Image
         plot_confusion_matrix(cm, name, f"{MODEL}_cm_{name}.png")
 
-    # --- PRINT AND SAVE ---
     final_output = "\n".join(output)
     print(final_output)
     FILENAME = MODEL + "_report.txt"
