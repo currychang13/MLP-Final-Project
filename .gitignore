@@ -5,3 +5,4 @@ plots/*
 __pycache__
 weights/*
 result/*
+best/
