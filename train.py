@@ -119,9 +119,9 @@ def train_model():
     criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=50, T_mult=1, eta_min=1e-6)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-9)
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=25, T_mult=1, eta_min=1e-7)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-7)
 
     history = {
         'train_loss': [],
@@ -132,8 +132,11 @@ def train_model():
     }
 
     best_val_loss = float('inf')
+    
     patience = 10
     counter = 0
+    terminated = 0
+
     for epoch in range(1, EPOCHS + 1):
         model.train()
         train_loss = 0
@@ -161,7 +164,7 @@ def train_model():
             train_loss += loss.item()
             loop.set_postfix(loss=loss.item(), lr=optimizer.param_groups[0]['lr'])
         
-        # scheduler.step()
+        scheduler.step()
         avg_train_loss = train_loss / len(train_loader)
         
         model.eval()
@@ -191,7 +194,7 @@ def train_model():
                 all_y_scores.append(probs.cpu().numpy())
         
         avg_val_loss = val_loss / len(val_loader)
-        scheduler.step(avg_val_loss)
+        # scheduler.step(avg_val_loss)
 
         all_y_true = np.vstack(all_y_true)
         all_y_scores = np.vstack(all_y_scores)
@@ -213,17 +216,18 @@ def train_model():
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             counter = 0
-            save_path = os.path.join(WEIGHT_DIR, "best_model.pth")
-            torch.save(model.state_dict(), save_path)
+            torch.save(model.state_dict(), os.path.join(WEIGHT_DIR, "best_model.pth"))
             print(f"--> Best model saved (Val loss: {best_val_loss:.4f})")
-        # else:
-        #     counter +=1
-        #     print(f"--> No improvement. EarlyStopping counter: {counter} out of {patience}")        
-        #     if counter >= patience:
-        #         print("=============================================")
-        #         print("Early stopping triggered. Training terminated.")
-        #         print("=============================================")
-        #         break 
+        else:
+            counter +=1
+            print(f"--> No improvement. EarlyStopping counter: {counter} out of {patience}")        
+            if counter >= patience and not terminated:
+                print("=============================================")
+                print("Early stopping triggered. Training terminated.")
+                print("=============================================")
+                torch.save(model.state_dict(), os.path.join(WEIGHT_DIR, "early_stopping.pth"))
+                terminated = 1
+                # break 
 
             
         torch.save(model.state_dict(), os.path.join(WEIGHT_DIR, "last_model.pth"))

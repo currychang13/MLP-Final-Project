@@ -9,18 +9,18 @@ DIAGNOSIS_DIM = 32
 STATIC_DIM = 3 
 
 # STATIC
-MLP_HIDDEN_1 = 256  # 128
+MLP_HIDDEN_1 = 256          # 128
 MLP_HIDDEN_2 = 128
 MLP_OUTPUT = 16
 
 # LSTMs
 LSTM_HIDDEN_SIZE = 512
-LSTM_LAYER = 4
+LSTM_LAYER = 1              # 10
 
 # Final Dense layer
 FINAL_DENSE_HIDDEN_1 = 256
 FINAL_DENSE_HIDDEN_2 = 128
-FINAL_DENSE_OUTPUT = 32
+FINAL_DENSE_OUTPUT = 32     # 64
 
 class EnsembleHFPredictor(nn.Module):
     def __init__(self):
@@ -33,7 +33,7 @@ class EnsembleHFPredictor(nn.Module):
             num_layers=LSTM_LAYER, 
             batch_first=True, 
             # bidirectional=True, 
-            dropout=0.1)
+            dropout=0)
         
         self.lstm_lab = nn.LSTM(
             input_size=LABS_DIM, 
@@ -41,7 +41,7 @@ class EnsembleHFPredictor(nn.Module):
             num_layers=LSTM_LAYER, 
             batch_first=True, 
             # bidirectional=True, 
-            dropout=0.1)
+            dropout=0)
         
         self.lstm_diagnosis = nn.LSTM(
             input_size=DIAGNOSIS_DIM, 
@@ -49,7 +49,7 @@ class EnsembleHFPredictor(nn.Module):
             num_layers=LSTM_LAYER, 
             batch_first=True, 
             # bidirectional=True,
-            dropout=0.1)
+            dropout=0)
         
         # ---------------- MLP --------------------
         self.dense_static = nn.Sequential(
@@ -68,15 +68,15 @@ class EnsembleHFPredictor(nn.Module):
         
         # Final Dense Hidden Layer
         self.final_hidden = nn.Sequential(
-            # nn.BatchNorm1d(ensemble_input_size),
+            nn.BatchNorm1d(ensemble_input_size),
 
             nn.Linear(ensemble_input_size, FINAL_DENSE_HIDDEN_1),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Dropout(0.3),
 
             nn.Linear(FINAL_DENSE_HIDDEN_1, FINAL_DENSE_HIDDEN_2),
             # nn.BatchNorm1d(FINAL_DENSE_HIDDEN_2),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Dropout(0.3),
             
             nn.Linear(FINAL_DENSE_HIDDEN_2, FINAL_DENSE_OUTPUT)

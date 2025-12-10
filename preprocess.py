@@ -106,19 +106,19 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
     df_lab_history = df_patient_lab[
         (df_patient_lab['LOGDATE'] >= start_date) & 
         (df_patient_lab['LOGDATE'] < admission_date)
-    ].sort_values('LOGDATE', ascending=False)
+    ].sort_values('LOGDATE', ascending=True)
     
     df_patient_opd = df_opd[df_opd['PERSONID2'] == patient_id]
     df_opd_history = df_patient_opd[
         (df_patient_opd['CREATEDATETIME'] >= start_date) & 
         (df_patient_opd['CREATEDATETIME'] < admission_date)
-    ].sort_values('CREATEDATETIME', ascending=False)
+    ].sort_values('CREATEDATETIME', ascending=True)
 
     df_patient_drug = df_drug[df_drug['PERSONID2'] == patient_id]
     df_drug_history = df_patient_drug[
         (df_patient_drug['CREATEDATE'] >= start_date) & 
         (df_patient_drug['CREATEDATE'] < admission_date)
-    ].sort_values('CREATEDATE', ascending=False)
+    ].sort_values('CREATEDATE', ascending=True)
     
 
     # -------------- MAKE TENSOR ------------------
@@ -178,6 +178,12 @@ def process_single_observation(obs_row, word_vectors, lab_stats, static_stats):
 
     diag_len = diagnosis_tensor.shape[0]
 
+    # Sanity Check    
+    # with open("sanity_check.txt", "w") as file:
+    #     file.write(f"Sanity check for PERSONID {obs_row['PERSONID2']}:\n")
+    #     file.write(f"drug: {drug_tensor}\ndrug_len: {drug_len}\nlab: {lab_tensor}\nlab_len:{lab_len}\ndiagnosis: {diagnosis_tensor}\ndiag_len: {diag_len}\nstatic: {static_vector}\nlabel: {target_label}")
+    # exit(0)    
+
     return {
         'drug': drug_tensor,
         'drug_len': drug_len, 
@@ -213,6 +219,7 @@ if __name__ == '__main__':
     total_observations = len(df_demographics)
     print(f"Starting generation for {total_observations} admissions using a {OBSERVATION_WINDOW_MONTHS}-month lookback...")
     
+    # For standarization
     train_demographics = df_demographics[df_demographics['PERSONID2'].isin(train_pids)]
     train_lab = df_lab[df_lab['PERSONID2'].isin(train_pids)]
 
@@ -271,7 +278,7 @@ if __name__ == '__main__':
     
     
     print("\n--- Class Statistics (Train) ---")
-    print(f"Total: {train_stats['total']}")
+    print(f"Total: {train_stats['total']} admissions")
     d30_ratio = train_stats['death_30']/train_stats['total']
     d180_ratio = train_stats['death_180']/train_stats['total']
     print(f"Death 180: {train_stats['death_180']} (Ratio: {d180_ratio:.4f})")
