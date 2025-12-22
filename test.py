@@ -67,7 +67,7 @@ def evaluate_model(chkpt_path):
 
             logits = model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)
             probs = torch.sigmoid(logits)
-            probs[:, 1] = torch.max(probs[:, 0], probs[:,1])
+            # probs[:, 1] = torch.max(probs[:, 0], probs[:,1])
             
             all_y_true.append(y.cpu().numpy())
             all_y_scores.append(probs.cpu().numpy())
@@ -121,6 +121,6 @@ def evaluate_model(chkpt_path):
     print(f"Confusion matrices saved to {PLOT_DIR}")
 
 if __name__ == '__main__':
-    chkpt_path = ["./weights/best_model.pth", "./weights/last_model.pth"]
+    chkpt_path = ["./weights/best_model.pth", "./weights/early_stopping.pth"]
     for chkpt in chkpt_path:
         evaluate_model(chkpt)

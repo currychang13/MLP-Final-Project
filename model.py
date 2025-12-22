@@ -33,7 +33,8 @@ class EnsembleHFPredictor(nn.Module):
             num_layers=LSTM_LAYER, 
             batch_first=True, 
             # bidirectional=True, 
-            dropout=0)
+            # dropout=0.2
+            )
         
         self.lstm_lab = nn.LSTM(
             input_size=LABS_DIM, 
@@ -41,7 +42,8 @@ class EnsembleHFPredictor(nn.Module):
             num_layers=LSTM_LAYER, 
             batch_first=True, 
             # bidirectional=True, 
-            dropout=0)
+            # dropout=0.2
+            )
         
         self.lstm_diagnosis = nn.LSTM(
             input_size=DIAGNOSIS_DIM, 
@@ -49,7 +51,8 @@ class EnsembleHFPredictor(nn.Module):
             num_layers=LSTM_LAYER, 
             batch_first=True, 
             # bidirectional=True,
-            dropout=0)
+            # dropout=0.2
+            )
         
         # ---------------- MLP --------------------
         self.dense_static = nn.Sequential(
@@ -68,7 +71,7 @@ class EnsembleHFPredictor(nn.Module):
         
         # Final Dense Hidden Layer
         self.final_hidden = nn.Sequential(
-            nn.BatchNorm1d(ensemble_input_size),
+            # nn.BatchNorm1d(ensemble_input_size),
 
             nn.Linear(ensemble_input_size, FINAL_DENSE_HIDDEN_1),
             nn.LeakyReLU(),
@@ -91,8 +94,8 @@ class EnsembleHFPredictor(nn.Module):
         )
         _, (h_n, _) = lstm_layer(packed_input)  # implicit state, Initialize h_0, c_0 at each batch.
         
-        # return torch.cat((h_n[-2], h_n[-1]), dim=1)
         return h_n[-1]
+        # return torch.cat((h_n[-2], h_n[-1]), dim=1)
     
     def forward(self, x_drug, drug_lens, x_lab, lab_lens, x_diagnosis, diag_lens, x_static):
         
