@@ -37,7 +37,7 @@ class ShapWrapper(nn.Module):
         self.l_drug_full = l_drug.cpu()
         self.l_lab_full  = l_lab.cpu()
         self.l_diag_full = l_diag.cpu()
-        self.target_idx = target_idx  # 0 or 1
+        self.target_idx = target_idx
 
     def forward(self, x_drug, x_lab, x_diag, x_static):
         n = x_drug.size(0)
@@ -54,8 +54,8 @@ class ShapWrapper(nn.Module):
         l_lab  = torch.clamp(l_lab,  min=1, max=x_lab.size(1))
         l_diag = torch.clamp(l_diag, min=1, max=x_diag.size(1))
 
-        out = self.model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)  # [B,2]
-        return out[:, self.target_idx:self.target_idx+1]  # [B,1]
+        out = self.model(x_drug, l_drug, x_lab, l_lab, x_diag, l_diag, x_static)  
+        return out[:, self.target_idx:self.target_idx+1]
  
 
 def set_rnn_train_only(model):
@@ -114,7 +114,7 @@ def run_shap_analysis(model, dataloader, device, lab_feature_names, nsamples=10)
             explainer = shap.GradientExplainer(shap_model, background)
             shap_vals = explainer.shap_values(inputs, nsamples=nsamples)
 
-            lab_shap = ensure_btd(shap_vals[1])  # -> [B,T,D]
+            lab_shap = ensure_btd(shap_vals[1]) 
             B, T2, D = lab_shap.shape
 
             if T2 != mask.shape[1]:
@@ -171,6 +171,7 @@ def run_shap_analysis(model, dataloader, device, lab_feature_names, nsamples=10)
             plot_type="dot",
             max_display=20
         )
+        plt.xlabel(f"SHAP Value on {target}", fontsize=12)
         plt.tight_layout()
         plt.savefig(os.path.join(PLOT_DIR, f"shap_summary_beeswarm_label_{target}.png"), dpi=200)
         plt.close()
@@ -223,7 +224,6 @@ def run_ablation_test(model, dataloader, device):
         results[mode] = roc_auc
         print(f" -> Result: ROC-AUC = {roc_auc:.4f}")
 
-    # Plot results
     plot_bar(results, "Ablation Study on Ensemble Components", "ablation_impact.png")
     
     return results
@@ -249,7 +249,6 @@ def main(chkpt_path):
         
     print(f"Loading weights from {chkpt_path}...")
     model.load_state_dict(torch.load(chkpt_path, map_location=DEVICE))
-
 
     run_ablation_test(model, test_loader, DEVICE)
     run_shap_analysis(model, test_loader, DEVICE, lab_feature_names=lab_cols)
